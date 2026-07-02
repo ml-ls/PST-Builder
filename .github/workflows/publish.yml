@@ -1,0 +1,57 @@
+name: Publish to NuGet
+
+# Publishes the three packages when you publish a GitHub Release, or on manual dispatch.
+# Requires a repository secret named NUGET_API_KEY (a nuget.org push key scoped to PstBuilder*).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 1.0.0). Defaults to the release tag."
+        required: false
+
+jobs:
+  publish:
+    name: Pack & push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          V="${{ github.event.inputs.version }}"
+          if [ -z "$V" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+            V="${TAG#v}"                       # strip a leading 'v' (v1.0.0 -> 1.0.0)
+          fi
+          if [ -z "$V" ]; then
+            echo "::error::No version resolved (no release tag and no manual input)."; exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Publishing version $V"
+
+      - name: Pack
+        run: |
+          for proj in \
+            src/PstBuilder/PstBuilder.csproj \
+            src/PstBuilder.Eml/PstBuilder.Eml.csproj \
+            src/PstBuilder.Pim/PstBuilder.Pim.csproj; do
+            dotnet pack "$proj" -c Release -o artifacts -p:Version=${{ steps.ver.outputs.version }}
+          done
+
+      - name: Push to NuGet
+        run: >
+          dotnet nuget push "artifacts/*.nupkg"
+          --api-key "${{ secrets.NUGET_API_KEY }}"
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate

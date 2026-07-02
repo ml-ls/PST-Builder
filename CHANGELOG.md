@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Crash/disconnect resilience for `PstExportSession`.** A producer can now pause indefinitely (e.g. a
+  source disconnect) and resume — there was never an idle timeout, and it's now covered by a test.
+- **Checkpointing & resume.** New `CreateResumable(path)` + `Checkpoint()` / `CheckpointAsync()` seal the
+  work so far into a durable, standalone PST part (flushed to disk with a real `fsync`) mid-export, so a
+  later crash costs only the items added since the last checkpoint. `Resume(path)` reopens the set after a
+  restart, continues in a fresh numbered part, and overwrites any partial trailing file left by the crash.
+  `Checkpoint()` also works on `CreateSplit` sessions.
+
 ## [1.0.1] - 2026-07-02
 
 ### Added

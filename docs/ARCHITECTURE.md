@@ -64,6 +64,9 @@ The doors you actually pour data through:
 - **`PstExportSession`** is a **conveyor belt**: many helpers can hand items in at the same time, but a
   single careful worker writes them into the box one at a time. It can also **split** into several boxes
   once one gets too big, and hand back **progress** tickets (`IProgress<ExportProgress>`) as it goes.
+  A producer can pause indefinitely (a disconnect) and resume — there's no timeout — and a **resumable**
+  session can `Checkpoint()` to seal a finished box mid-run so a crash only loses the current one;
+  `Resume` picks up in a fresh box afterwards.
 - **`Pst`** is the **front door**: one short line to either compose a folder tree in memory and write it
   (`Pst.Write`) or open a streaming session (`Pst.Create`).
 

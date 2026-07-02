@@ -96,6 +96,16 @@ namespace PstBuilder.Foundation
         /// <summary>Flushes the underlying stream.</summary>
         public void Flush() => _stream.Flush();
 
+        /// <summary>
+        /// Flushes all the way to disk (a real fsync for a <see cref="FileStream"/>), so a finalized part
+        /// survives a power loss, not just a process crash. Best-effort for non-file streams.
+        /// </summary>
+        public void FlushToDisk()
+        {
+            if (_stream is FileStream fs) fs.Flush(flushToDisk: true);
+            else _stream.Flush();
+        }
+
         // netstandard2.0 Stream has no Span overload; copy through a pooled-free temporary.
         // Kept private and small; hot paths pass already-materialized arrays via Append(byte[]).
         private static byte[] GetArray(ReadOnlySpan<byte> data)

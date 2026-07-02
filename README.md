@@ -201,6 +201,46 @@ session.AddEml("Archive/2024/January", eml2);            // nested folders auto-
 session.AddEml("Archive/2024/January", eml3);            // reuses the same folder
 ```
 
+## Surviving disconnects and crashes
+
+Long exports shouldn't fall apart if something hiccups. Two very different things can go wrong, so here's
+how each is handled.
+
+**Your source disconnects, but the process is alive** — say the backup feed or network you're pulling
+from stalls. Nothing to do: a session has **no idle timeout**. The single writer just waits on an empty
+queue, and when your source reconnects you carry on calling `Add*` exactly where you left off.
+
+**The process itself crashes** — for that, checkpoint. A **resumable** session lets you seal the work so
+far into a durable, standalone PST at any point with `Checkpoint()`; if the process then dies, you keep
+every checkpointed part and lose only the items added since the last one. After a restart, `Resume`
+reopens the set and continues in a fresh part, leaving the finished parts untouched — you just replay the
+items your producer added since its last checkpoint.
+
+```csharp
+using var session = PstExportSession.CreateResumable("mailbox.pst");
+
+foreach (var batch in source.ReadBatches())
+{
+    foreach (var eml in batch) session.AddEml("Inbox", eml);
+    var part = session.Checkpoint();   // everything so far is now durable on disk
+    source.MarkDone(batch);            // your producer records how far it got
+}
+
+session.Complete();
+```
+
+```csharp
+// …after a crash and restart:
+using var session = PstExportSession.Resume("mailbox.pst");   // continues at the next part
+foreach (var eml in source.ReadSince(lastCheckpoint)) session.AddEml("Inbox", eml);
+session.Complete();
+```
+
+A checkpointed export produces **numbered parts** (`mailbox.pst`, `mailbox-002.pst`, …), each a complete
+PST — the same shape as [splitting](#file-size-splitting-and-compression). Each checkpoint is flushed all
+the way to disk (a real `fsync`), so parts survive a power loss, not just a process crash; and a partial
+trailing file left by the crash is detected and overwritten on resume, never mistaken for a finished part.
+
 ## What ends up in the PST
 
 | Item | How |

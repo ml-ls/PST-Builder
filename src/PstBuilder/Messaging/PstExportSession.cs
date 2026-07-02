@@ -51,14 +51,24 @@ namespace PstBuilder.Messaging
     /// <para><b>Splitting.</b> Use <see cref="CreateSplit"/> with a byte threshold to roll over to a new
     /// PST file once the current one reaches that size; each part is a standalone PST that recreates the
     /// folder tree for the items it holds. <see cref="Complete"/> returns one <see cref="PstPart"/> per file.</para>
+    ///
+    /// <para><b>Crash resilience.</b> A producer may pause for any length of time (e.g. a source
+    /// disconnect) and resume calling <c>Add*</c> — there is no idle timeout. For durability across a
+    /// process crash, use <see cref="CreateResumable"/> and call <see cref="Checkpoint"/> to seal the
+    /// current part as a standalone PST mid-export; a crash then costs only the items added since the last
+    /// checkpoint. After a restart, <see cref="Resume"/> reopens the set and continues at the next part,
+    /// leaving finished parts intact — your producer replays the items it added since its last checkpoint.</para>
     /// </summary>
     public sealed class PstExportSession : IDisposable
     {
         private sealed class WorkItem
         {
             public string FolderPath = string.Empty;
-            public MessageItem Item = null!;
+            public MessageItem? Item;
             public string? ContainerClass;
+            // Non-null → a checkpoint barrier: the consumer seals the current part in order and completes
+            // this with the finalized part (or null if nothing new since the previous part boundary).
+            public TaskCompletionSource<PstPart?>? Checkpoint;
         }
 
         private readonly Func<int, PstOutputStream> _openOutput; // creates the N-th part (1-based)
@@ -71,17 +81,20 @@ namespace PstBuilder.Messaging
         private readonly List<PstPart> _parts = new List<PstPart>();
         private readonly IProgress<ExportProgress>? _progress;   // optional progress sink
         private readonly int _progressInterval;                  // report every N items
+        private readonly bool _supportsCheckpoint;               // true when parts get distinct file names
 
         private StoreWriter _store;
         private PstOutputStream _output;
         private int _partIndex = 1;
         private long _itemsWritten;
+        private long _itemsInCurrentPart;
         private volatile Exception? _fault;
         private int _completed;
 
         private PstExportSession(Func<int, PstOutputStream> openOutput, Func<int, string> partName,
             bool ownsOutputs, long maxBytes, string storeDisplayName, int queueCapacity,
-            IProgress<ExportProgress>? progress, int progressInterval)
+            IProgress<ExportProgress>? progress, int progressInterval,
+            bool supportsCheckpoint = false, int startPartIndex = 1)
         {
             _openOutput = openOutput;
             _partName = partName;
@@ -90,6 +103,8 @@ namespace PstBuilder.Messaging
             _displayName = storeDisplayName;
             _progress = progress;
             _progressInterval = progressInterval > 0 ? progressInterval : 1;
+            _supportsCheckpoint = supportsCheckpoint;
+            _partIndex = startPartIndex;
             _output = _openOutput(_partIndex);
             _store = new StoreWriter { StoreDisplayName = _displayName };
             _store.Begin(_output);
@@ -135,17 +150,77 @@ namespace PstBuilder.Messaging
         {
             if (maxBytesPerFile <= PstConstants.FirstAMapOffset)
                 throw new ArgumentOutOfRangeException(nameof(maxBytesPerFile), "Threshold is unreasonably small.");
-            string PartPath(int index)
-            {
-                if (index == 1) return path;
-                string dir = Path.GetDirectoryName(path) ?? string.Empty;
-                string name = Path.GetFileNameWithoutExtension(path);
-                string ext = Path.GetExtension(path);
-                return Path.Combine(dir, $"{name}-{index:D3}{ext}");
-            }
             return new PstExportSession(
-                i => new PstOutputStream(new FileStream(PartPath(i), FileMode.Create, FileAccess.ReadWrite)),
-                PartPath, ownsOutputs: true, maxBytesPerFile, storeDisplayName, queueCapacity, progress, progressInterval);
+                i => new PstOutputStream(new FileStream(PartPath(path, i), FileMode.Create, FileAccess.ReadWrite)),
+                i => PartPath(path, i), ownsOutputs: true, maxBytesPerFile, storeDisplayName, queueCapacity,
+                progress, progressInterval, supportsCheckpoint: true);
+        }
+
+        /// <summary>
+        /// Creates a resumable, checkpointable export. Parts are named like <see cref="CreateSplit"/>
+        /// (<paramref name="path"/>, "name-002.ext", …) but a new part is only started when you call
+        /// <see cref="Checkpoint"/> — or, if <paramref name="maxBytesPerFile"/> is non-zero, also on size.
+        /// Each checkpoint writes a durable, standalone PST, so a later crash costs you only the items
+        /// added since the last one. After a restart, reopen the set with <see cref="Resume"/>.
+        /// </summary>
+        public static PstExportSession CreateResumable(string path, long maxBytesPerFile = 0,
+            string storeDisplayName = "Personal Folders", int queueCapacity = 1024,
+            IProgress<ExportProgress>? progress = null, int progressInterval = 256)
+        {
+            if (maxBytesPerFile != 0 && maxBytesPerFile <= PstConstants.FirstAMapOffset)
+                throw new ArgumentOutOfRangeException(nameof(maxBytesPerFile), "Threshold is unreasonably small.");
+            return new PstExportSession(
+                i => new PstOutputStream(new FileStream(PartPath(path, i), FileMode.Create, FileAccess.ReadWrite)),
+                i => PartPath(path, i), ownsOutputs: true, maxBytesPerFile, storeDisplayName, queueCapacity,
+                progress, progressInterval, supportsCheckpoint: true);
+        }
+
+        /// <summary>
+        /// Resumes a checkpointed export after a restart: scans for the parts already on disk
+        /// (<paramref name="path"/>, "name-002.ext", …) and continues at the next slot, leaving every
+        /// completed part untouched. A trailing <em>incomplete</em> part (left behind by the crash) is
+        /// spotted by its missing header magic and overwritten. Your producer should replay only the items
+        /// it added since its last successful <see cref="Checkpoint"/>.
+        /// </summary>
+        public static PstExportSession Resume(string path, long maxBytesPerFile = 0,
+            string storeDisplayName = "Personal Folders", int queueCapacity = 1024,
+            IProgress<ExportProgress>? progress = null, int progressInterval = 256)
+        {
+            if (maxBytesPerFile != 0 && maxBytesPerFile <= PstConstants.FirstAMapOffset)
+                throw new ArgumentOutOfRangeException(nameof(maxBytesPerFile), "Threshold is unreasonably small.");
+            int next = 1;
+            while (IsCompletePst(PartPath(path, next))) next++;   // first missing/incomplete slot
+            return new PstExportSession(
+                i => new PstOutputStream(new FileStream(PartPath(path, i), FileMode.Create, FileAccess.ReadWrite)),
+                i => PartPath(path, i), ownsOutputs: true, maxBytesPerFile, storeDisplayName, queueCapacity,
+                progress, progressInterval, supportsCheckpoint: true, startPartIndex: next);
+        }
+
+        // The file name of the N-th part: part 1 is the given path; later parts get a "-NNN" suffix.
+        private static string PartPath(string path, int index)
+        {
+            if (index <= 1) return path;
+            string dir = Path.GetDirectoryName(path) ?? string.Empty;
+            string name = Path.GetFileNameWithoutExtension(path);
+            string ext = Path.GetExtension(path);
+            return Path.Combine(dir, $"{name}-{index:D3}{ext}");
+        }
+
+        // True only for a fully finalized PST: the header magic ("!BDN") is written at finalization, so a
+        // partial file left by a crash reads as incomplete.
+        private static bool IsCompletePst(string file)
+        {
+            if (!File.Exists(file)) return false;
+            try
+            {
+                using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    var magic = new byte[4];
+                    return fs.Read(magic, 0, 4) == 4
+                        && magic[0] == 0x21 && magic[1] == 0x42 && magic[2] == 0x44 && magic[3] == 0x4E; // "!BDN"
+                }
+            }
+            catch { return false; }
         }
 
         /// <summary>Bytes written to the current output so far (lags queued-but-unwritten items). Used by
@@ -210,6 +285,31 @@ namespace PstBuilder.Messaging
         public Task EnsureFolderAsync(string folderPath, string? containerClass = null, CancellationToken cancellationToken = default) =>
             EnqueueAsync(new WorkItem { FolderPath = folderPath, Item = null!, ContainerClass = containerClass }, cancellationToken);
 
+        // ----- checkpointing (durable part boundaries for crash resilience) -----
+
+        /// <summary>
+        /// Seals the current part to disk as a durable, standalone PST and starts the next one, so
+        /// everything queued before this call survives a later crash. Returns the finalized part, or
+        /// <c>null</c> if nothing new had been added since the previous part boundary. Only valid on a
+        /// split/resumable session (see <see cref="CreateSplit"/> / <see cref="CreateResumable"/> /
+        /// <see cref="Resume"/>) — otherwise throws. Thread-safe; blocks until the write completes. Items
+        /// enqueued on other threads concurrently with this call may land in either part.
+        /// </summary>
+        public PstPart? Checkpoint() =>
+            CheckpointAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+
+        /// <summary>Awaitable counterpart to <see cref="Checkpoint"/>. The token guards the enqueue only;
+        /// once the barrier is accepted, the checkpoint runs to completion.</summary>
+        public async Task<PstPart?> CheckpointAsync(CancellationToken cancellationToken = default)
+        {
+            if (!_supportsCheckpoint)
+                throw new InvalidOperationException(
+                    "Checkpoint requires a split or resumable session (CreateSplit / CreateResumable / Resume).");
+            var barrier = new TaskCompletionSource<PstPart?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            await EnqueueAsync(new WorkItem { Checkpoint = barrier }, cancellationToken).ConfigureAwait(false);
+            return await barrier.Task.ConfigureAwait(false);
+        }
+
         private void ThrowIfFaulted()
         {
             var fault = _fault;
@@ -246,32 +346,66 @@ namespace PstBuilder.Messaging
                 {
                     while (reader.TryRead(out var work))
                     {
+                        if (work.Checkpoint != null)
+                        {
+                            // Seal the current part in order; skip (return null) if nothing new to make durable.
+                            try { work.Checkpoint.TrySetResult(_itemsInCurrentPart > 0 ? RollToNextPart() : null); }
+                            catch (Exception ex) { work.Checkpoint.TrySetException(ex); throw; }
+                            continue;
+                        }
+
                         var folder = _store.GetOrCreateFolder(work.FolderPath, work.ContainerClass);
                         if (work.Item != null)
                         {
                             _store.AddMessage(folder, work.Item);
                             _itemsWritten++;
+                            _itemsInCurrentPart++;
                             if (_progress != null && _itemsWritten % _progressInterval == 0)
                                 _progress.Report(new ExportProgress(_itemsWritten, _output.Position, _partIndex, false));
                         }
-                        if (_maxBytes > 0 && _output.Position >= _maxBytes) RollOver();
+                        if (_maxBytes > 0 && _output.Position >= _maxBytes) RollToNextPart();
                     }
                 }
             }
             catch (Exception ex)
             {
                 _fault = ex;
+                // Don't leave a queued checkpoint's awaiter hanging on the fault.
+                while (_queue.Reader.TryRead(out var pending))
+                    pending.Checkpoint?.TrySetException(
+                        new InvalidOperationException("Export failed; see inner exception.", ex));
             }
         }
 
-        private void RollOver()
+        // Finalizes the current store into a durable part (recorded in _parts) and returns it.
+        private PstPart FinalizeCurrentPart()
         {
-            _parts.Add(new PstPart(_partName(_partIndex), _store.Complete()));
-            if (_ownsOutputs) _output.Dispose();
+            var part = new PstPart(_partName(_partIndex), _store.Complete());
+            _parts.Add(part);
+            return part;
+        }
+
+        private void CloseCurrentOutput()
+        {
+            if (_ownsOutputs) { _output.FlushToDisk(); _output.Dispose(); }
+        }
+
+        private void OpenNextPart()
+        {
             _partIndex++;
             _output = _openOutput(_partIndex);
             _store = new StoreWriter { StoreDisplayName = _displayName };
             _store.Begin(_output);
+            _itemsInCurrentPart = 0;
+        }
+
+        // Seals the current part durably and opens the next; used by size-based splitting and Checkpoint.
+        private PstPart RollToNextPart()
+        {
+            var part = FinalizeCurrentPart();
+            CloseCurrentOutput();
+            OpenNextPart();
+            return part;
         }
 
         /// <summary>Drains the queue and finalizes all PST files. Returns one part per file. Call once.</summary>
@@ -284,9 +418,9 @@ namespace PstBuilder.Messaging
             _consumer.GetAwaiter().GetResult();   // drain (the consumer captures faults; it never throws here)
             ThrowIfFaulted();
 
-            _parts.Add(new PstPart(_partName(_partIndex), _store.Complete()));
+            FinalizeCurrentPart();
             _progress?.Report(new ExportProgress(_itemsWritten, _output.Position, _partIndex, true));
-            if (_ownsOutputs) _output.Dispose();
+            CloseCurrentOutput();
             return new PstExportResult(_parts);
         }
 
@@ -307,9 +441,9 @@ namespace PstBuilder.Messaging
 
             return await Task.Run(() =>
             {
-                _parts.Add(new PstPart(_partName(_partIndex), _store.Complete()));
+                FinalizeCurrentPart();
                 _progress?.Report(new ExportProgress(_itemsWritten, _output.Position, _partIndex, true));
-                if (_ownsOutputs) _output.Dispose();
+                CloseCurrentOutput();
                 return new PstExportResult(_parts);
             }, cancellationToken).ConfigureAwait(false);
         }

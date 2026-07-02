@@ -2,21 +2,26 @@
 
   <!--
     Imported after each project's body, so IsPackable (set to false by the test/sample projects) is
-    visible here. The three libraries leave IsPackable at its default (true) and so pick up the full
+    visible here. The libraries leave IsPackable at its default (true) and so pick up the full
     package metadata; tests and samples opt out.
   -->
 
   <PropertyGroup Condition="'$(IsPackable)' != 'false'">
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/pstbuilder/pstbuilder</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/pstbuilder/pstbuilder</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/ml-ls/PST-Builder</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/ml-ls/PST-Builder</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>pst;outlook;mapi;ms-pst;email;mailbox;export;backup</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <IncludeSymbols>true</IncludeSymbols>
-    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <!-- Ship XML docs so consumers get IntelliSense on the public surface. -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!-- Symbols only for projects that actually produce an assembly (metapackages set
+       IncludeBuildOutput=false and have nothing to symbolicate). -->
+  <PropertyGroup Condition="'$(IsPackable)' != 'false' and '$(IncludeBuildOutput)' != 'false'">
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
 
   <!-- Bundle the repo README into every package (rendered on the NuGet gallery page). -->

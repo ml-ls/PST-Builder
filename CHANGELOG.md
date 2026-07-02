@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`PstBuilder.All`** convenience metapackage — installs the core plus both source adapters
+  (`PstBuilder.Eml`, `PstBuilder.Pim`) in one reference.
+
+### Fixed
+- Corrected the NuGet `PackageProjectUrl` / `RepositoryUrl` to the real repository
+  (`github.com/ml-ls/PST-Builder`). Applies to packages built from this point on.
+
 ## [1.0.0] - 2026-07-02
 
 First public release. A write-once .NET library that builds a Unicode (64-bit) PST from a mailbox

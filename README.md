@@ -131,10 +131,13 @@ Three ways to reference it:
 ```
 
 ```bash
-# 2. NuGet package (once published — the projects already set PackageId)
-dotnet add package PstBuilder
-dotnet add package PstBuilder.Eml     # optional .eml adapter
-dotnet add package PstBuilder.Pim     # optional .vcf/.ics adapter
+# 2. NuGet package
+dotnet add package PstBuilder         # dependency-light core
+dotnet add package PstBuilder.Eml     # optional .eml adapter (pulls in MimeKit)
+dotnet add package PstBuilder.Pim     # optional .vcf/.ics adapter (no deps)
+
+# …or grab everything in one shot:
+dotnet add package PstBuilder.All     # core + both adapters (batteries included)
 ```
 
 ```xml
@@ -265,6 +268,7 @@ bytes), so attachments are never flagged or dropped.
 src/PstBuilder            core library        (netstandard2.0 + net8.0, MIT)
 src/PstBuilder.Eml        .eml adapter        (netstandard2.0 + net8.0, MimeKit)
 src/PstBuilder.Pim        .vcf/.ics adapter   (netstandard2.0 + net8.0, no deps)
+src/PstBuilder.All        convenience metapackage (core + both adapters)
 tests/PstBuilder.Tests    xUnit tests         (net9.0)
 samples/PstBuilder.Sample console sample      (net9.0)
 samples/PstBuilder.LargeTest large-file / item-variance generator (net9.0)

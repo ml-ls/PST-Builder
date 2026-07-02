@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Convenience metapackage: no code of its own — it just depends on the core plus every source
+    adapter, so `dotnet add package PstBuilder.All` gives you the batteries-included experience.
+    Install `PstBuilder` alone for the dependency-light core (this bundle transitively pulls in
+    MimeKit via PstBuilder.Eml).
+  -->
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
+    <!-- Metapackage: ship dependencies only, no lib/ assembly. -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <!-- Suppress "dependency group has no matching lib files" — expected for a metapackage. -->
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+    <!-- No source, so no XML docs to generate. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <PackageId>PstBuilder.All</PackageId>
+    <Description>Metapackage that installs PstBuilder plus all source adapters (PstBuilder.Eml for .eml via MimeKit, PstBuilder.Pim for .vcf/.ics). Install this for the batteries-included experience; install PstBuilder alone for a dependency-light core.</Description>
+  </PropertyGroup>
+
+  <!-- ProjectReferences become NuGet package dependencies (at the same version) when packed. -->
+  <ItemGroup>
+    <ProjectReference Include="..\PstBuilder\PstBuilder.csproj" />
+    <ProjectReference Include="..\PstBuilder.Eml\PstBuilder.Eml.csproj" />
+    <ProjectReference Include="..\PstBuilder.Pim\PstBuilder.Pim.csproj" />
+  </ItemGroup>
+
+</Project>

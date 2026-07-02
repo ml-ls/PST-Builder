@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.1] - 2026-07-02
 
 ### Added
 - **`PstBuilder.All`** convenience metapackage — installs the core plus both source adapters
@@ -12,7 +12,7 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 - Corrected the NuGet `PackageProjectUrl` / `RepositoryUrl` to the real repository
-  (`github.com/ml-ls/PST-Builder`). Applies to packages built from this point on.
+  (`github.com/ml-ls/PST-Builder`); the 1.0.0 packages carried a placeholder URL.
 
 ## [1.0.0] - 2026-07-02
 
@@ -57,4 +57,5 @@ prompt, no import step. It never reads or mutates an existing PST.
 - Two cosmetic `scanpst` advisory notes remain (a `PidTagMessageSize` recompute and a deprecated
   search-folder note); neither prevents Outlook from opening or reading the file.
 
-[1.0.0]: https://github.com/pstbuilder/pstbuilder/releases/tag/v1.0.0
+[1.0.1]: https://github.com/ml-ls/PST-Builder/releases/tag/v1.0.1
+[1.0.0]: https://github.com/ml-ls/PST-Builder/releases/tag/v1.0.0

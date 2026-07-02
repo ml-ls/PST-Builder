@@ -1,0 +1,18 @@
+<Project>
+
+  <!--
+    Universal, unconditional metadata for every project. Packaging-only settings that must respect a
+    project's IsPackable flag live in Directory.Build.targets, which is imported AFTER the project body
+    (so it can see IsPackable=false set by the test/sample projects). Directory.Build.props is imported
+    BEFORE the body, so any IsPackable-gated condition here would evaluate too early.
+  -->
+
+  <PropertyGroup>
+    <Version>1.0.0</Version>
+    <Authors>PstBuilder contributors</Authors>
+    <Product>PST Builder</Product>
+    <Copyright>Copyright (c) PstBuilder contributors</Copyright>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- netstandard2.0 for the widest reach (Framework, Mono, old Core); net8.0 for the in-box
+         Span/Channels types and better JIT on modern runtimes. -->
+    <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- MS-PST member names use spec casing; relax a couple of analyzers later if needed. -->
+
+    <!-- NuGet / MIT metadata (shared bits live in Directory.Build.props) -->
+    <PackageId>PstBuilder</PackageId>
+    <Description>Write-once exporter that builds a Unicode (64-bit) PST from Office 365 mailbox backups. One-way; never reads or mutates existing PSTs.</Description>
+  </PropertyGroup>
+
+  <!-- Span<T>/Memory<T>, BinaryPrimitives and bounded Channel<T> are in-box on net8.0; only
+       netstandard2.0 needs the compatibility packages. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="System.Memory" Version="4.5.5" />
+    <PackageReference Include="System.Threading.Channels" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PstBuilder.Tests" />
+  </ItemGroup>
+
+</Project>

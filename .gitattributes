@@ -1,0 +1,22 @@
+# Normalize line endings: stored as LF in the repo, checked out native on each OS.
+* text=auto
+
+# Source / project files
+*.cs      text diff=csharp
+*.csproj  text
+*.props   text
+*.targets text
+*.sln     text eol=crlf
+*.md      text
+*.yml     text
+*.yaml    text
+*.json    text
+
+# Shell scripts must stay LF even on Windows
+*.sh      text eol=lf
+
+# Binary assets (never touch line endings)
+*.pst     binary
+*.snk     binary
+*.png     binary
+*.ico     binary

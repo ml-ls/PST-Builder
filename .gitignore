@@ -1,0 +1,23 @@
+# Build output
+bin/
+obj/
+artifacts/
+TestResults/
+
+# NuGet package output (from `dotnet pack`)
+*.nupkg
+*.snupkg
+
+# IDE / editor
+.vs/
+.idea/
+*.user
+*.suo
+
+# Machine-local Claude Code settings (personal permission allow-list, absolute paths)
+.claude/settings.local.json
+
+# Generated / dev-only PST files and their debug dumps (see ValidateExternalFileTests)
+*.pst
+*.pst.dump.txt
+*.pst.node.txt

@@ -1,0 +1,27 @@
+<Project>
+
+  <!--
+    Imported after each project's body, so IsPackable (set to false by the test/sample projects) is
+    visible here. The three libraries leave IsPackable at its default (true) and so pick up the full
+    package metadata; tests and samples opt out.
+  -->
+
+  <PropertyGroup Condition="'$(IsPackable)' != 'false'">
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/pstbuilder/pstbuilder</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/pstbuilder/pstbuilder</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>pst;outlook;mapi;ms-pst;email;mailbox;export;backup</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- Ship XML docs so consumers get IntelliSense on the public surface. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!-- Bundle the repo README into every package (rendered on the NuGet gallery page). -->
+  <ItemGroup Condition="'$(IsPackable)' != 'false' and Exists('$(MSBuildThisFileDirectory)README.md')">
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+</Project>

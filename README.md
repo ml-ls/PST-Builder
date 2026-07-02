@@ -1,5 +1,8 @@
 # PST Builder
 
+[![CI](https://github.com/ml-ls/PST-Builder/actions/workflows/ci.yml/badge.svg)](https://github.com/ml-ls/PST-Builder/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A write-once .NET library that turns a mailbox backup (emails + contacts + calendar + tasks + notes)
 into a single **Unicode (64-bit) PST** file that **Microsoft Outlook opens directly** — no repair
 prompt, no import step.

@@ -1,7 +1,9 @@
 name: Publish to NuGet
 
 # Publishes the three packages when you publish a GitHub Release, or on manual dispatch.
-# Requires a repository secret named NUGET_API_KEY (a nuget.org push key scoped to PstBuilder*).
+# Auth is NuGet Trusted Publishing (OIDC): no stored API key — GitHub's id-token is exchanged
+# for a short-lived NuGet key at publish time. Requires a Trusted Publishing policy on nuget.org
+# for owner "ml6719", repo "ml-ls/PST-Builder", workflow "publish.yml".
 on:
   release:
     types: [published]
@@ -10,6 +12,10 @@ on:
       version:
         description: "Version to publish (e.g. 1.0.0). Defaults to the release tag."
         required: false
+
+permissions:
+  contents: read
+  id-token: write        # required for NuGet Trusted Publishing (OIDC)
 
 jobs:
   publish:
@@ -49,9 +55,15 @@ jobs:
             dotnet pack "$proj" -c Release -o artifacts -p:Version=${{ steps.ver.outputs.version }}
           done
 
+      - name: NuGet login (Trusted Publishing / OIDC)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ml6719
+
       - name: Push to NuGet
         run: >
           dotnet nuget push "artifacts/*.nupkg"
-          --api-key "${{ secrets.NUGET_API_KEY }}"
+          --api-key "${{ steps.login.outputs.NUGET_API_KEY }}"
           --source https://api.nuget.org/v3/index.json
           --skip-duplicate

@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-07-03
+
+### Added
+- **Background zip compression for exported PST parts.** Pass `compress: true` to `Create`, `CreateSplit`,
+  `CreateResumable`, or `Resume` (and the matching `Pst` facade methods) and each finished part is zipped
+  into a sibling `name.pst.zip` on a background task the moment it closes — the writer moves straight on
+  to the next part instead of waiting. The raw `.pst` is deleted only once its archive is fully written,
+  so a crash mid-compression never loses either artifact, and `Resume()` recognizes an already-zipped part
+  as complete. `Complete()` / `CompleteAsync()` wait for any still-running compression before returning;
+  the new `PstPart.WhenReady` task gives per-part visibility for callers (e.g. right after `Checkpoint()`)
+  who need to know sooner. A zipped part must be extracted before Outlook (or any other PST reader) can
+  open it — this is for storage/transfer efficiency, not direct use.
+
 ## [1.2.0] - 2026-07-02
 
 ### Changed
@@ -80,6 +93,7 @@ prompt, no import step. It never reads or mutates an existing PST.
 - Two cosmetic `scanpst` advisory notes remain (a `PidTagMessageSize` recompute and a deprecated
   search-folder note); neither prevents Outlook from opening or reading the file.
 
+[1.3.0]: https://github.com/ml-ls/PST-Builder/releases/tag/v1.3.0
 [1.2.0]: https://github.com/ml-ls/PST-Builder/releases/tag/v1.2.0
 [1.1.0]: https://github.com/ml-ls/PST-Builder/releases/tag/v1.1.0
 [1.0.1]: https://github.com/ml-ls/PST-Builder/releases/tag/v1.0.1

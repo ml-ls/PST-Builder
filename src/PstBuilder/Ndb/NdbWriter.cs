@@ -59,9 +59,10 @@ namespace PstBuilder.Ndb
         {
             if (_regionIndex >= PstConstants.MaxAMapRegions)
                 throw new NotSupportedException(
-                    $"PST exceeds {PstConstants.MaxAMapRegions} AMap regions (~485 MB); FPMap pages are " +
-                    "required beyond this size and are not yet emitted. Split the export into smaller parts " +
-                    "(see PstExportSession.CreateSplit).");
+                    $"This PST reached the single-file limit of {PstConstants.MaxAMapRegions} AMap regions " +
+                    "(~3.4 GB). PstExportSession writing to a file path rolls into numbered parts automatically " +
+                    "before this; hitting it means either a caller-owned output stream (Create(PstOutputStream), " +
+                    "which cannot roll) or a single item larger than one part.");
 
             _curAMapOffset = _regionStart;
             _lastAMapIb = _regionStart;

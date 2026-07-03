@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **A single-file (`Create(path)` / `Pst.Create`) export no longer fails when it would exceed the ~3.4 GB
+  single-file limit** — it now rolls into numbered parts (`name.pst`, `name-002.pst`, …) automatically,
+  the same shape as `CreateSplit`. `CreateSplit` thresholds are likewise clamped just below the ceiling.
+  Only a caller-owned output stream (`Create(PstOutputStream)`) can still hit the hard limit.
+
+### Fixed
+- Corrected the stale over-limit error message (it referenced "~485 MB" and claimed FPMap pages weren't
+  emitted; the real limit is ~3.4 GB and FPMap is emitted).
+
 ## [1.1.0] - 2026-07-02
 
 ### Added

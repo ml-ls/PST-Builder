@@ -133,5 +133,10 @@ namespace PstBuilder.Foundation
         /// or confirm the FPMap interval with another oracle round.
         /// </summary>
         public const int MaxAMapRegions = 14000;
+
+        /// <summary>The hard byte ceiling for a single file: <see cref="MaxAMapRegions"/> × <see cref="AMapSpan"/>
+        /// (≈ 3.4 GB). Streaming sessions roll into a new numbered part well before this; it is only a
+        /// backstop for outputs that can't roll (a caller-owned stream, or a single item larger than a part).</summary>
+        public const long MaxSingleFileBytes = (long)MaxAMapRegions * AMapSpan; // ~3,555,328,000
     }
 }

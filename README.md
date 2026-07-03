@@ -276,8 +276,14 @@ contents-table rows stick around. Peak memory tracks item **count**, not mailbox
 - **Single files** are supported up to **~3.4 GB** (`PstConstants.MaxAMapRegions`). Bigger single files
   are possible but would need one more allocation-map interval confirmed against Outlook (see the FPMap
   note in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
-- **Splitting:** `PstExportSession.CreateSplit(path, maxBytesPerFile)` rolls over to numbered parts
-  (`name.pst`, `name-002.pst`, …) once a file hits the threshold; each part is a standalone PST.
+- **A large import never fails on size.** A file-backed session (`Create(path)` / `Pst.Create`) stays a
+  single file for ordinary exports, but if the data would cross the single-file limit it **automatically
+  rolls into numbered parts** (`name.pst`, `name-002.pst`, …) rather than throwing. So you can point a
+  10 GB import at a plain `Create` and just get several standalone PSTs — `Complete()` returns one
+  `PstPart` per file. (The one exception is a caller-owned output stream, `Create(PstOutputStream)`, which
+  can't open new files and so still hits the hard limit.)
+- **Choosing the part size:** `PstExportSession.CreateSplit(path, maxBytesPerFile)` rolls over at a
+  threshold *you* pick (still clamped below the ~3.4 GB ceiling); each part is a standalone PST.
 - **No compression.** The PST format has no general/whole-file compression — attachments and data are
   stored as-is (Outlook's own PSTs are the same). To shrink a PST at rest, zip the `.pst` file yourself
   (e.g. zip/7-Zip) and unzip it before opening.

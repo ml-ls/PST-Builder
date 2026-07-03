@@ -50,7 +50,10 @@ namespace PstBuilder.Messaging
     ///
     /// <para><b>Splitting.</b> Use <see cref="CreateSplit"/> with a byte threshold to roll over to a new
     /// PST file once the current one reaches that size; each part is a standalone PST that recreates the
-    /// folder tree for the items it holds. <see cref="Complete"/> returns one <see cref="PstPart"/> per file.</para>
+    /// folder tree for the items it holds. <see cref="Complete"/> returns one <see cref="PstPart"/> per file.
+    /// Even a plain <see cref="Create(string,string,int,IProgress{ExportProgress},int)"/> (single-file) export
+    /// rolls into numbered parts automatically if it would otherwise exceed the writer's ~3.4 GB single-file
+    /// limit, so a large import never fails on size. Only a caller-owned output stream cannot roll.</para>
     ///
     /// <para><b>Crash resilience.</b> A producer may pause for any length of time (e.g. a source
     /// disconnect) and resume calling <c>Add*</c> — there is no idle timeout. For durability across a
@@ -82,6 +85,14 @@ namespace PstBuilder.Messaging
         private readonly IProgress<ExportProgress>? _progress;   // optional progress sink
         private readonly int _progressInterval;                  // report every N items
         private readonly bool _supportsCheckpoint;               // true when parts get distinct file names
+        private readonly bool _canRoll;                          // true when we own the outputs (can open a new part)
+        private readonly long _rollThreshold;                    // roll into the next part at this many bytes
+
+        // Default size at which an unsplit file-backed export rolls into the next numbered part (3 GiB is
+        // within the size validated in real Outlook), and the ceiling no part may cross (just under the
+        // writer's ~3.4 GB region cap, leaving room for the finalize pass).
+        private const long DefaultAutoRollBytes = 3L * 1024 * 1024 * 1024;
+        private static readonly long SafeMaxPartBytes = PstConstants.MaxSingleFileBytes - (128L * 1024 * 1024);
 
         private StoreWriter _store;
         private PstOutputStream _output;
@@ -94,7 +105,7 @@ namespace PstBuilder.Messaging
         private PstExportSession(Func<int, PstOutputStream> openOutput, Func<int, string> partName,
             bool ownsOutputs, long maxBytes, string storeDisplayName, int queueCapacity,
             IProgress<ExportProgress>? progress, int progressInterval,
-            bool supportsCheckpoint = false, int startPartIndex = 1)
+            bool supportsCheckpoint = false, int startPartIndex = 1, long autoRollBytes = 0)
         {
             _openOutput = openOutput;
             _partName = partName;
@@ -104,6 +115,11 @@ namespace PstBuilder.Messaging
             _progress = progress;
             _progressInterval = progressInterval > 0 ? progressInterval : 1;
             _supportsCheckpoint = supportsCheckpoint;
+            // We roll at the caller's split size if given, otherwise the safe default — but never past the
+            // ceiling. A caller-owned output stream can't roll, so it relies on the writer's backstop instead.
+            _canRoll = ownsOutputs;
+            long requested = maxBytes > 0 ? maxBytes : (autoRollBytes > 0 ? autoRollBytes : DefaultAutoRollBytes);
+            _rollThreshold = Math.Min(requested, SafeMaxPartBytes);
             _partIndex = startPartIndex;
             _output = _openOutput(_partIndex);
             _store = new StoreWriter { StoreDisplayName = _displayName };
@@ -119,15 +135,29 @@ namespace PstBuilder.Messaging
                 TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
         }
 
-        /// <summary>Creates a session that writes a single PST file at <paramref name="path"/>. Pass
-        /// <paramref name="progress"/> to receive periodic <see cref="ExportProgress"/> updates (every
-        /// <paramref name="progressInterval"/> items, plus a final snapshot).</summary>
+        /// <summary>Creates a session that writes a PST file at <paramref name="path"/>. Stays a single
+        /// file for ordinary exports; if the data would exceed the writer's ~3.4 GB single-file limit it
+        /// rolls into numbered parts (<paramref name="path"/>, "name-002.ext", …) automatically rather than
+        /// failing. Pass <paramref name="progress"/> to receive periodic <see cref="ExportProgress"/> updates
+        /// (every <paramref name="progressInterval"/> items, plus a final snapshot).</summary>
         public static PstExportSession Create(string path, string storeDisplayName = "Personal Folders",
             int queueCapacity = 1024, IProgress<ExportProgress>? progress = null, int progressInterval = 256)
         {
             return new PstExportSession(
-                _ => new PstOutputStream(new FileStream(path, FileMode.Create, FileAccess.ReadWrite)),
-                _ => path, ownsOutputs: true, maxBytes: 0, storeDisplayName, queueCapacity, progress, progressInterval);
+                i => new PstOutputStream(new FileStream(PartPath(path, i), FileMode.Create, FileAccess.ReadWrite)),
+                i => PartPath(path, i), ownsOutputs: true, maxBytes: 0, storeDisplayName, queueCapacity,
+                progress, progressInterval);
+        }
+
+        // Test seam: a file-backed session that rolls at a caller-chosen (small) size so the auto-roll
+        // behavior can be exercised without generating multiple gigabytes.
+        internal static PstExportSession CreateWithAutoRoll(string path, long autoRollBytes,
+            string storeDisplayName = "Personal Folders", int queueCapacity = 1024)
+        {
+            return new PstExportSession(
+                i => new PstOutputStream(new FileStream(PartPath(path, i), FileMode.Create, FileAccess.ReadWrite)),
+                i => PartPath(path, i), ownsOutputs: true, maxBytes: 0, storeDisplayName, queueCapacity,
+                progress: null, progressInterval: 256, autoRollBytes: autoRollBytes);
         }
 
         /// <summary>Creates a session that writes to <paramref name="output"/> (caller keeps ownership; no splitting).</summary>
@@ -363,7 +393,7 @@ namespace PstBuilder.Messaging
                             if (_progress != null && _itemsWritten % _progressInterval == 0)
                                 _progress.Report(new ExportProgress(_itemsWritten, _output.Position, _partIndex, false));
                         }
-                        if (_maxBytes > 0 && _output.Position >= _maxBytes) RollToNextPart();
+                        if (_canRoll && _output.Position >= _rollThreshold) RollToNextPart();
                     }
                 }
             }

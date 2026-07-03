@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using PstBuilder.Foundation;
 using PstBuilder.Messaging;
 using PstBuilder.Ndb;
@@ -143,6 +144,114 @@ namespace PstBuilder.Tests.Messaging
                 Assert.True(File.Exists(Path.Combine(dir, "big-002.pst")));       // later parts get -NNN
                 foreach (var part in result.Parts)
                     new NdbRoundTripReader(File.ReadAllBytes(part.Name)).ReadAndValidate();  // every part is a valid PST
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+            }
+        }
+
+        // Compression runs in the background per part; rolling into several parts must still end up with
+        // every part zipped (and no raw .pst left behind) by the time Complete() returns.
+        [Fact]
+        public void AutoRollWithCompress_EveryPartEndsUpZipped()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "pstbuilder-autoroll-zip-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            string path = Path.Combine(dir, "big.pst");
+            try
+            {
+                PstExportResult result;
+                using (var session = PstExportSession.CreateWithAutoRoll(path, autoRollBytes: 300_000, compress: true))
+                {
+                    for (int i = 0; i < 1200; i++)
+                        session.AddMessage("Inbox", new MessageItem
+                        {
+                            Subject = $"message {i}",
+                            Body = new string('x', 400),
+                        });
+                    result = session.Complete();
+                }
+
+                Assert.True(result.Parts.Count > 1, "export should have rolled into multiple parts");
+                foreach (var part in result.Parts)
+                {
+                    Assert.EndsWith(".zip", part.Name);
+                    Assert.True(File.Exists(part.Name));
+                    Assert.False(File.Exists(part.Name.Substring(0, part.Name.Length - ".zip".Length)));
+                    Assert.True(part.WhenReady.IsCompletedSuccessfully);
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+            }
+        }
+
+        // Checkpoint() must not block on compression (the whole point of running it in the background),
+        // but by the time Complete() returns every checkpointed part must be durably zipped too.
+        [Fact]
+        public void CheckpointWithCompress_CheckpointDoesNotBlock_AllPartsZippedByComplete()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "pstbuilder-checkpoint-zip-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            string path = Path.Combine(dir, "export.pst");
+            try
+            {
+                using var session = PstExportSession.CreateResumable(path, compress: true);
+                session.AddMessage("Inbox", new MessageItem { Subject = "a1" });
+                var part1 = session.Checkpoint();
+                Assert.NotNull(part1);
+                Assert.Equal(path + ".zip", part1!.Name);
+
+                session.AddMessage("Inbox", new MessageItem { Subject = "a2" });
+                var result = session.Complete();
+
+                foreach (var part in result.Parts)
+                {
+                    Assert.True(part.WhenReady.IsCompletedSuccessfully);
+                    Assert.True(File.Exists(part.Name));
+                    Assert.False(File.Exists(part.Name.Substring(0, part.Name.Length - ".zip".Length)));
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+            }
+        }
+
+        // Resume() must recognize an already-compressed part as complete (raw .pst deleted, .zip present)
+        // and continue at the next slot rather than re-doing it.
+        [Fact]
+        public async Task Resume_RecognizesCompressedPartAsComplete()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "pstbuilder-resume-zip-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            string path = Path.Combine(dir, "export.pst");
+            string part2 = Path.Combine(dir, "export-002.pst");
+            try
+            {
+                using (var session = PstExportSession.CreateResumable(path, compress: true))
+                {
+                    session.AddMessage("Inbox", new MessageItem { Subject = "a1" });
+                    var sealed1 = session.Checkpoint();
+                    Assert.NotNull(sealed1);
+                    // Checkpoint() deliberately doesn't wait for compression (that's the point of running
+                    // it in the background) — wait on WhenReady explicitly before relying on the .zip below.
+                    await sealed1!.WhenReady;
+                    // fall out WITHOUT Complete() → simulates a crash right after the checkpoint
+                }
+
+                Assert.False(File.Exists(path));
+                Assert.True(File.Exists(path + ".zip"));
+
+                using (var session = PstExportSession.Resume(path, compress: true))
+                {
+                    session.AddMessage("Inbox", new MessageItem { Subject = "a2" });
+                    session.Complete();
+                }
+
+                Assert.True(File.Exists(part2 + ".zip"));   // resumed straight into part 2, part 1 left alone
             }
             finally
             {

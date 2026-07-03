@@ -284,9 +284,15 @@ contents-table rows stick around. Peak memory tracks item **count**, not mailbox
   can't open new files and so still hits the hard limit.)
 - **Choosing the part size:** `PstExportSession.CreateSplit(path, maxBytesPerFile)` rolls over at a
   threshold *you* pick (still clamped below the ~3.4 GB ceiling); each part is a standalone PST.
-- **No compression.** The PST format has no general/whole-file compression — attachments and data are
-  stored as-is (Outlook's own PSTs are the same). To shrink a PST at rest, zip the `.pst` file yourself
-  (e.g. zip/7-Zip) and unzip it before opening.
+- **Optional background compression.** The PST format itself has no general/whole-file compression —
+  attachments and data are stored as-is (Outlook's own PSTs are the same). But every file-backed factory
+  (`Create`, `CreateSplit`, `CreateResumable`, `Resume`) takes a `compress: true` flag: each part is zipped
+  into a sibling `name.pst.zip` the instant it closes, on a background task, so the writer moves straight
+  on to the next part rather than waiting. The raw `.pst` is deleted only once its `.zip` is fully written,
+  so a crash mid-compression never loses anything. `Complete()`/`CompleteAsync()` wait for any
+  still-in-flight compression before returning; `PstPart.WhenReady` resolves per-part if you need to know
+  sooner (e.g. right after a `Checkpoint()`). A zipped part must be extracted before Outlook (or any other
+  PST reader) can open it — this is for storage/transfer efficiency, not direct use.
 
 ## The layers, bottom to top
 

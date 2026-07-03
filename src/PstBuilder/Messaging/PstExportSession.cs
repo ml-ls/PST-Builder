@@ -16,7 +16,13 @@ namespace PstBuilder.Messaging
         public string Name { get; }
         /// <summary>The finalized header of this part.</summary>
         public PstHeader Header { get; }
-        internal PstPart(string name, PstHeader header) { Name = name; Header = header; }
+        /// <summary>
+        /// In plain words: a claim ticket for this part's file — done immediately, unless compression is
+        /// still shrink-wrapping it in the background, in which case this finishes when that's done.
+        /// Already-completed when compression is off (the part is durable the moment it's returned).
+        /// </summary>
+        public Task WhenReady { get; }
+        internal PstPart(string name, PstHeader header, Task whenReady) { Name = name; Header = header; WhenReady = whenReady; }
     }
 
     /// <summary>The result of a completed export: one part per PST file written.</summary>
@@ -61,6 +67,14 @@ namespace PstBuilder.Messaging
     /// current part as a standalone PST mid-export; a crash then costs only the items added since the last
     /// checkpoint. After a restart, <see cref="Resume"/> reopens the set and continues at the next part,
     /// leaving finished parts intact — your producer replays the items it added since its last checkpoint.</para>
+    ///
+    /// <para><b>Compression.</b> Pass <c>compress: true</c> to any file-backed factory and each part is
+    /// zipped into a sibling <c>.pst.zip</c> the moment it closes, on a background task — the writer moves
+    /// straight on to the next part without waiting. The raw <c>.pst</c> is deleted only once its archive
+    /// is fully written, so nothing is ever lost to a crash mid-compression. <see cref="Complete"/> /
+    /// <see cref="CompleteAsync"/> wait for any still-running compression before returning; a
+    /// <see cref="PstPart.WhenReady"/> task is available per part if you need to know sooner. A zipped
+    /// part must be extracted before Outlook (or any other PST reader) can open it.</para>
     /// </summary>
     public sealed class PstExportSession : IDisposable
     {
@@ -77,6 +91,9 @@ namespace PstBuilder.Messaging
         private readonly Func<int, PstOutputStream> _openOutput; // creates the N-th part (1-based)
         private readonly Func<int, string> _partName;
         private readonly bool _ownsOutputs;
+        private readonly bool _compress;
+        private readonly SemaphoreSlim _compressionGate = new SemaphoreSlim(1, 1); // one zip job at a time
+        private readonly List<Task> _compressionTasks = new List<Task>();
         private readonly long _maxBytes; // 0 = never split
         private readonly string _displayName;
         private readonly Channel<WorkItem> _queue;               // bounded → backpressure (sync + async)
@@ -105,11 +122,13 @@ namespace PstBuilder.Messaging
         private PstExportSession(Func<int, PstOutputStream> openOutput, Func<int, string> partName,
             bool ownsOutputs, long maxBytes, string storeDisplayName, int queueCapacity,
             IProgress<ExportProgress>? progress, int progressInterval,
-            bool supportsCheckpoint = false, int startPartIndex = 1, long autoRollBytes = 0)
+            bool supportsCheckpoint = false, int startPartIndex = 1, long autoRollBytes = 0,
+            bool compress = false)
         {
             _openOutput = openOutput;
             _partName = partName;
             _ownsOutputs = ownsOutputs;
+            _compress = compress;
             _maxBytes = maxBytes;
             _displayName = storeDisplayName;
             _progress = progress;
@@ -139,25 +158,27 @@ namespace PstBuilder.Messaging
         /// file for ordinary exports; if the data would exceed the writer's ~3.4 GB single-file limit it
         /// rolls into numbered parts (<paramref name="path"/>, "name-002.ext", …) automatically rather than
         /// failing. Pass <paramref name="progress"/> to receive periodic <see cref="ExportProgress"/> updates
-        /// (every <paramref name="progressInterval"/> items, plus a final snapshot).</summary>
+        /// (every <paramref name="progressInterval"/> items, plus a final snapshot). Pass
+        /// <paramref name="compress"/> to zip each part in the background as it closes.</summary>
         public static PstExportSession Create(string path, string storeDisplayName = "Personal Folders",
-            int queueCapacity = 1024, IProgress<ExportProgress>? progress = null, int progressInterval = 256)
+            int queueCapacity = 1024, IProgress<ExportProgress>? progress = null, int progressInterval = 256,
+            bool compress = false)
         {
             return new PstExportSession(
                 i => new PstOutputStream(new FileStream(PartPath(path, i), FileMode.Create, FileAccess.ReadWrite)),
                 i => PartPath(path, i), ownsOutputs: true, maxBytes: 0, storeDisplayName, queueCapacity,
-                progress, progressInterval);
+                progress, progressInterval, compress: compress);
         }
 
         // Test seam: a file-backed session that rolls at a caller-chosen (small) size so the auto-roll
         // behavior can be exercised without generating multiple gigabytes.
         internal static PstExportSession CreateWithAutoRoll(string path, long autoRollBytes,
-            string storeDisplayName = "Personal Folders", int queueCapacity = 1024)
+            string storeDisplayName = "Personal Folders", int queueCapacity = 1024, bool compress = false)
         {
             return new PstExportSession(
                 i => new PstOutputStream(new FileStream(PartPath(path, i), FileMode.Create, FileAccess.ReadWrite)),
                 i => PartPath(path, i), ownsOutputs: true, maxBytes: 0, storeDisplayName, queueCapacity,
-                progress: null, progressInterval: 256, autoRollBytes: autoRollBytes);
+                progress: null, progressInterval: 256, autoRollBytes: autoRollBytes, compress: compress);
         }
 
         /// <summary>Creates a session that writes to <paramref name="output"/> (caller keeps ownership; no splitting).</summary>
@@ -176,14 +197,14 @@ namespace PstBuilder.Messaging
         /// </summary>
         public static PstExportSession CreateSplit(string path, long maxBytesPerFile,
             string storeDisplayName = "Personal Folders", int queueCapacity = 1024,
-            IProgress<ExportProgress>? progress = null, int progressInterval = 256)
+            IProgress<ExportProgress>? progress = null, int progressInterval = 256, bool compress = false)
         {
             if (maxBytesPerFile <= PstConstants.FirstAMapOffset)
                 throw new ArgumentOutOfRangeException(nameof(maxBytesPerFile), "Threshold is unreasonably small.");
             return new PstExportSession(
                 i => new PstOutputStream(new FileStream(PartPath(path, i), FileMode.Create, FileAccess.ReadWrite)),
                 i => PartPath(path, i), ownsOutputs: true, maxBytesPerFile, storeDisplayName, queueCapacity,
-                progress, progressInterval, supportsCheckpoint: true);
+                progress, progressInterval, supportsCheckpoint: true, compress: compress);
         }
 
         /// <summary>
@@ -195,14 +216,14 @@ namespace PstBuilder.Messaging
         /// </summary>
         public static PstExportSession CreateResumable(string path, long maxBytesPerFile = 0,
             string storeDisplayName = "Personal Folders", int queueCapacity = 1024,
-            IProgress<ExportProgress>? progress = null, int progressInterval = 256)
+            IProgress<ExportProgress>? progress = null, int progressInterval = 256, bool compress = false)
         {
             if (maxBytesPerFile != 0 && maxBytesPerFile <= PstConstants.FirstAMapOffset)
                 throw new ArgumentOutOfRangeException(nameof(maxBytesPerFile), "Threshold is unreasonably small.");
             return new PstExportSession(
                 i => new PstOutputStream(new FileStream(PartPath(path, i), FileMode.Create, FileAccess.ReadWrite)),
                 i => PartPath(path, i), ownsOutputs: true, maxBytesPerFile, storeDisplayName, queueCapacity,
-                progress, progressInterval, supportsCheckpoint: true);
+                progress, progressInterval, supportsCheckpoint: true, compress: compress);
         }
 
         /// <summary>
@@ -214,7 +235,7 @@ namespace PstBuilder.Messaging
         /// </summary>
         public static PstExportSession Resume(string path, long maxBytesPerFile = 0,
             string storeDisplayName = "Personal Folders", int queueCapacity = 1024,
-            IProgress<ExportProgress>? progress = null, int progressInterval = 256)
+            IProgress<ExportProgress>? progress = null, int progressInterval = 256, bool compress = false)
         {
             if (maxBytesPerFile != 0 && maxBytesPerFile <= PstConstants.FirstAMapOffset)
                 throw new ArgumentOutOfRangeException(nameof(maxBytesPerFile), "Threshold is unreasonably small.");
@@ -223,7 +244,7 @@ namespace PstBuilder.Messaging
             return new PstExportSession(
                 i => new PstOutputStream(new FileStream(PartPath(path, i), FileMode.Create, FileAccess.ReadWrite)),
                 i => PartPath(path, i), ownsOutputs: true, maxBytesPerFile, storeDisplayName, queueCapacity,
-                progress, progressInterval, supportsCheckpoint: true, startPartIndex: next);
+                progress, progressInterval, supportsCheckpoint: true, startPartIndex: next, compress: compress);
         }
 
         // The file name of the N-th part: part 1 is the given path; later parts get a "-NNN" suffix.
@@ -237,9 +258,13 @@ namespace PstBuilder.Messaging
         }
 
         // True only for a fully finalized PST: the header magic ("!BDN") is written at finalization, so a
-        // partial file left by a crash reads as incomplete.
+        // partial file left by a crash reads as incomplete. A "{file}.zip" sibling is also proof of a
+        // completed part — PstPartCompressor only ever deletes the raw file after the archive is fully
+        // written and renamed into place, so the raw file surviving a crash mid-compression still reads
+        // as complete via the check below.
         private static bool IsCompletePst(string file)
         {
+            if (File.Exists(file + ".zip")) return true;
             if (!File.Exists(file)) return false;
             try
             {
@@ -407,10 +432,25 @@ namespace PstBuilder.Messaging
             }
         }
 
-        // Finalizes the current store into a durable part (recorded in _parts) and returns it.
+        // Finalizes the current store, closes its output, and (if enabled) kicks off background
+        // compression before recording the durable part. Compression must only start once the file is
+        // closed — the header/AMap patches in NdbWriter.Finalize() are still landing on disk up to that
+        // point, so reading the file any earlier would race the last writes.
         private PstPart FinalizeCurrentPart()
         {
-            var part = new PstPart(_partName(_partIndex), _store.Complete());
+            var header = _store.Complete();
+            CloseCurrentOutput();
+            string rawPath = _partName(_partIndex);
+            string name = rawPath;
+            Task ready = Task.CompletedTask;
+            if (_compress && _ownsOutputs)
+            {
+                name = rawPath + ".zip";
+                var task = Task.Run(() => PstPartCompressor.CompressAndReplaceAsync(rawPath, _compressionGate));
+                _compressionTasks.Add(task);
+                ready = task;
+            }
+            var part = new PstPart(name, header, ready);
             _parts.Add(part);
             return part;
         }
@@ -433,7 +473,6 @@ namespace PstBuilder.Messaging
         private PstPart RollToNextPart()
         {
             var part = FinalizeCurrentPart();
-            CloseCurrentOutput();
             OpenNextPart();
             return part;
         }
@@ -450,7 +489,7 @@ namespace PstBuilder.Messaging
 
             FinalizeCurrentPart();
             _progress?.Report(new ExportProgress(_itemsWritten, _output.Position, _partIndex, true));
-            CloseCurrentOutput();
+            if (_compressionTasks.Count > 0) Task.WaitAll(_compressionTasks.ToArray());
             return new PstExportResult(_parts);
         }
 
@@ -469,13 +508,13 @@ namespace PstBuilder.Messaging
             ThrowIfFaulted();
             cancellationToken.ThrowIfCancellationRequested();
 
-            return await Task.Run(() =>
+            await Task.Run(() =>
             {
                 FinalizeCurrentPart();
                 _progress?.Report(new ExportProgress(_itemsWritten, _output.Position, _partIndex, true));
-                CloseCurrentOutput();
-                return new PstExportResult(_parts);
             }, cancellationToken).ConfigureAwait(false);
+            if (_compressionTasks.Count > 0) await Task.WhenAll(_compressionTasks).ConfigureAwait(false);
+            return new PstExportResult(_parts);
         }
 
         /// <inheritdoc/>

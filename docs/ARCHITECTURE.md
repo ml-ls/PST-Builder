@@ -67,7 +67,10 @@ The doors you actually pour data through:
   failing if it would blow past the ~3.4 GB per-file limit — and it hands back **progress** tickets
   (`IProgress<ExportProgress>`) as it goes. A producer can pause indefinitely (a disconnect) and resume —
   there's no timeout — and a **resumable** session can `Checkpoint()` to seal a finished box mid-run so a
-  crash only loses the current one; `Resume` picks up in a fresh box afterwards.
+  crash only loses the current one; `Resume` picks up in a fresh box afterwards. With `compress: true`,
+  each sealed box is also zipped by a small parallel worker the moment it closes — the belt keeps moving
+  onto the next box without waiting, and the original box is only thrown away once its zipped copy is
+  fully written, so a crash mid-zip can't lose either one.
 - **`Pst`** is the **front door**: one short line to either compose a folder tree in memory and write it
   (`Pst.Write`) or open a streaming session (`Pst.Create`).
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -139,6 +140,51 @@ namespace PstBuilder.Tests.Messaging
             await Assert.ThrowsAsync<InvalidOperationException>(
                 () => session.AddMessageAsync("Inbox", new MessageItem { Subject = "y" }));
             session.Dispose();
+        }
+
+        // Compression only applies to file-backed sessions (there's a path to zip), so these use a real
+        // temp file rather than the in-memory MemoryStream sessions above.
+        [Fact]
+        public void Compress_ProducesZipAndDeletesRaw_RoundTrips()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "pstbuilder-compress-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            string path = Path.Combine(dir, "export.pst");
+            string zipPath = path + ".zip";
+            try
+            {
+                PstExportResult result;
+                using (var session = PstExportSession.Create(path, compress: true))
+                {
+                    session.AddMessage("Inbox", new MessageItem { Subject = "one" });
+                    session.AddMessage("Inbox", new MessageItem { Subject = "two" });
+                    result = session.Complete();
+                }
+
+                Assert.False(File.Exists(path));   // raw part deleted once its archive was confirmed written
+                Assert.True(File.Exists(zipPath));
+
+                var part = Assert.Single(result.Parts);
+                Assert.Equal(zipPath, part.Name);
+                Assert.True(part.WhenReady.IsCompletedSuccessfully);
+
+                using var archive = ZipFile.OpenRead(zipPath);
+                var entry = Assert.Single(archive.Entries);
+                Assert.Equal("export.pst", entry.Name);
+
+                using var entryStream = entry.Open();
+                using var extracted = new MemoryStream();
+                entryStream.CopyTo(extracted);
+
+                var reader = new NdbRoundTripReader(extracted.ToArray());
+                reader.ReadAndValidate();
+                int messages = reader.Nodes.Count(kv => new Nid(kv.Key).Type == NidType.NormalMessage);
+                Assert.Equal(2, messages);
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+            }
         }
     }
 }

@@ -45,16 +45,19 @@ namespace PstBuilder
         }
 
         /// <summary>Opens a streaming export writing a single PST at <paramref name="path"/> (shortcut for
-        /// <see cref="PstExportSession.Create(string,string,int,IProgress{ExportProgress},int)"/>).</summary>
+        /// <see cref="PstExportSession.Create(string,string,int,IProgress{ExportProgress},int,bool)"/>). Pass
+        /// <paramref name="compress"/> to zip each part in the background as it closes.</summary>
         public static PstExportSession Create(string path, string storeDisplayName = "Personal Folders",
-            int queueCapacity = 1024, IProgress<ExportProgress>? progress = null, int progressInterval = 256) =>
-            PstExportSession.Create(path, storeDisplayName, queueCapacity, progress, progressInterval);
+            int queueCapacity = 1024, IProgress<ExportProgress>? progress = null, int progressInterval = 256,
+            bool compress = false) =>
+            PstExportSession.Create(path, storeDisplayName, queueCapacity, progress, progressInterval, compress);
 
         /// <summary>Opens a streaming export that rolls over to a new PST file once the current one reaches
-        /// <paramref name="maxBytesPerFile"/> (shortcut for <see cref="PstExportSession.CreateSplit"/>).</summary>
+        /// <paramref name="maxBytesPerFile"/> (shortcut for <see cref="PstExportSession.CreateSplit"/>). Pass
+        /// <paramref name="compress"/> to zip each part in the background as it closes.</summary>
         public static PstExportSession CreateSplit(string path, long maxBytesPerFile,
             string storeDisplayName = "Personal Folders", int queueCapacity = 1024,
-            IProgress<ExportProgress>? progress = null, int progressInterval = 256) =>
-            PstExportSession.CreateSplit(path, maxBytesPerFile, storeDisplayName, queueCapacity, progress, progressInterval);
+            IProgress<ExportProgress>? progress = null, int progressInterval = 256, bool compress = false) =>
+            PstExportSession.CreateSplit(path, maxBytesPerFile, storeDisplayName, queueCapacity, progress, progressInterval, compress);
     }
 }
